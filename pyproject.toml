@@ -1,0 +1,11 @@
+[project]
+name = "forge"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.139.0",
+    "pydantic-settings>=2.14.2",
+    "uvicorn>=0.51.0",
+]
