@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from app.models.task import Task
+from app.models.task_status import TaskStatus
 from app.repositories.task_repository import TaskRepository
 
 
@@ -18,7 +19,7 @@ class TaskService:
         # The service owns task initialization so future queue dispatch can plug in here.
         task = Task(
             task_type=task_type,
-            status="PENDING",
+            status=TaskStatus.PENDING,
             payload=dict(payload),
         )
         return self._task_repository.create(task)

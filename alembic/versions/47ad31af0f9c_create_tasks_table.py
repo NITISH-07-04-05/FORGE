@@ -27,9 +27,18 @@ def upgrade() -> None:
         sa.Column("task_type", sa.String(length=100), nullable=False),
         sa.Column(
             "status",
-            sa.String(length=50),
+            sa.Enum(
+                "PENDING",
+                "RUNNING",
+                "COMPLETED",
+                "FAILED",
+                name="task_status",
+                native_enum=False,
+                create_constraint=False,
+                length=50,
+            ),
             nullable=False,
-            server_default=sa.text("'pending'"),
+            server_default=sa.text("'PENDING'"),
         ),
         sa.Column(
             "payload",
