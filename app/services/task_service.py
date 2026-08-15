@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
@@ -38,10 +38,17 @@ class TaskService:
         priority: TaskPriority = TaskPriority.NORMAL,
         max_retries: int = 0,
         scheduled_at: datetime | None = None,
+        delay_seconds: int | None = None,
     ) -> Task:
         now = datetime.now(timezone.utc)
         target_scheduled_at: datetime | None = None
-        if scheduled_at is not None:
+
+        if delay_seconds is not None:
+            if delay_seconds > 0:
+                target_scheduled_at = now + timedelta(seconds=delay_seconds)
+            else:
+                target_scheduled_at = None
+        elif scheduled_at is not None:
             if scheduled_at.tzinfo is None:
                 target_scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
             else:

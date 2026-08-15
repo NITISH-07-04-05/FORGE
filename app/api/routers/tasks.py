@@ -45,6 +45,7 @@ def create_task(
         priority=task_in.priority,
         max_retries=task_in.max_retries,
         scheduled_at=task_in.scheduled_at,
+        delay_seconds=task_in.delay_seconds,
     )
 
     # Commit first so the worker cannot race ahead of the visible task row.

@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.models.task_priority import TaskPriority
 
@@ -15,6 +15,13 @@ class TaskCreate(BaseModel):
     priority: TaskPriority = TaskPriority.NORMAL
     max_retries: int = Field(default=0, ge=0)
     scheduled_at: datetime | None = None
+    delay_seconds: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def validate_exclusive_schedule_and_delay(self) -> TaskCreate:
+        if self.scheduled_at is not None and self.delay_seconds is not None:
+            raise ValueError("Cannot provide both 'scheduled_at' and 'delay_seconds'")
+        return self
 
 
 class TaskResponse(BaseModel):
