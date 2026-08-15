@@ -28,6 +28,10 @@ class TaskRepository:
         statement = select(Task).where(Task.id == task_id)
         return self._session.scalar(statement)
 
+    def get_for_update(self, task_id: UUID) -> Task | None:
+        statement = select(Task).where(Task.id == task_id).with_for_update()
+        return self._session.scalar(statement)
+
     def list(self, limit: int = 100) -> list[Task]:
         statement = select(Task).order_by(Task.created_at.desc()).limit(limit)
         return list(self._session.scalars(statement))
@@ -42,6 +46,15 @@ class TaskRepository:
                 Task.next_retry_at <= at,
             )
             .order_by(Task.next_retry_at.asc(), Task.created_at.asc())
+            .limit(limit)
+        )
+        return list(self._session.scalars(statement))
+
+    def list_dead_lettered(self, limit: int = 100) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(Task.status == TaskStatus.DEAD_LETTERED)
+            .order_by(Task.completed_at.desc())
             .limit(limit)
         )
         return list(self._session.scalars(statement))

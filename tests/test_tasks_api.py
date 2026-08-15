@@ -52,6 +52,9 @@ class InMemoryTaskRepository:
     def get(self, task_id: UUID) -> Task | None:
         return self.tasks.get(task_id)
 
+    def get_for_update(self, task_id: UUID) -> Task | None:
+        return self.tasks.get(task_id)
+
     def list(self, limit: int = 100) -> list[Task]:
         return list(self.tasks.values())[:limit]
 

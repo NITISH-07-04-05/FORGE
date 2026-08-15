@@ -161,7 +161,7 @@ def test_one_retry_then_failure() -> None:
     assert task.id in queue.scheduled
 
     assert worker.process_next_task() is True
-    assert task.status == TaskStatus.FAILED
+    assert task.status == TaskStatus.DEAD_LETTERED
     assert task.retry_count == 1
     assert queue.scheduled == {}
 
@@ -205,7 +205,7 @@ def test_retry_exhaustion_becomes_terminal_failure() -> None:
     assert task.retry_count == 2
 
     assert worker.process_next_task() is True
-    assert task.status == TaskStatus.FAILED
+    assert task.status == TaskStatus.DEAD_LETTERED
     assert task.retry_count == 2
     assert queue.scheduled == {}
 
@@ -242,7 +242,7 @@ def test_worker_keeps_processing_after_repeated_failure() -> None:
     assert failing_task.status == TaskStatus.RETRY_WAITING
 
     assert worker.process_next_task() is True
-    assert failing_task.status == TaskStatus.FAILED
+    assert failing_task.status == TaskStatus.DEAD_LETTERED
 
     queue.enqueue(echo_task.id)
 

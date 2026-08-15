@@ -13,6 +13,10 @@ class TaskDispatchError(RuntimeError):
     """Raised when a task cannot be handed off to the worker queue."""
 
 
+class TaskNotRecoverableError(RuntimeError):
+    """Raised when a recovery is attempted on a task that is not DEAD_LETTERED."""
+
+
 class TaskService:
     """Application-layer workflow for creating and retrieving tasks."""
 
@@ -57,3 +61,24 @@ class TaskService:
 
     def list_tasks(self, limit: int = 100) -> list[Task]:
         return self._task_repository.list(limit=limit)
+
+    def list_dead_lettered(self, limit: int = 100) -> list[Task]:
+        return self._task_repository.list_dead_lettered(limit=limit)
+
+    def recover_task(self, task_id: UUID) -> Task:
+        """Recover a dead-lettered task back to PENDING for re-execution.
+
+        Acquires a row-level lock (FOR UPDATE) to prevent concurrent recoveries from racing.
+        Raises TaskNotRecoverableError if the task is not DEAD_LETTERED, which
+        covers both non-existent tasks and duplicate concurrent recovery attempts.
+        """
+        task = self._task_repository.get_for_update(task_id)
+
+        if task is None or task.status != TaskStatus.DEAD_LETTERED:
+            raise TaskNotRecoverableError(
+                f"Task {task_id} is not in DEAD_LETTERED state and cannot be recovered."
+            )
+
+        task.recover()
+        self._task_repository.update(task)
+        return task

@@ -135,14 +135,32 @@ class Worker:
             logger.exception("Failed to enqueue delayed retry for task %s.", task.id)
 
     def _handle_terminal_failure(self, task: Task, error_message: str, started_at: datetime | None) -> None:
-        if task.status == TaskStatus.RUNNING:
-            task.mark_failed(error_message)
+        # Tasks with retries configured that exhaust their budget enter the DLQ.
+        # Zero-retry failures (max_retries=0) remain ordinary FAILED — V1 behavior preserved.
+        if task.max_retries > 0 and task.retry_count >= task.max_retries:
+            self._handle_dead_letter(task, error_message, started_at)
         else:
-            task.mark_failed(error_message, started_at=started_at)
+            if task.status == TaskStatus.RUNNING:
+                task.mark_failed(error_message)
+            else:
+                task.mark_failed(error_message, started_at=started_at)
+
+            try:
+                self._task_repository.update(task)
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                logger.exception("Failed to persist FAILED state for task %s.", task.id)
+
+    def _handle_dead_letter(self, task: Task, error_message: str, started_at: datetime | None) -> None:
+        if task.status == TaskStatus.RUNNING:
+            task.mark_dead_lettered(error_message)
+        else:
+            task.mark_dead_lettered(error_message, started_at=started_at)
 
         try:
             self._task_repository.update(task)
             self._session.commit()
         except Exception:
             self._session.rollback()
-            logger.exception("Failed to persist FAILED state for task %s.", task.id)
+            logger.exception("Failed to persist DEAD_LETTERED state for task %s.", task.id)

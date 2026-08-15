@@ -28,10 +28,11 @@ def _utcnow() -> datetime:
 
 ALLOWED_TASK_STATUS_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
-    TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RETRY_WAITING}),
-    TaskStatus.RETRY_WAITING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
+    TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RETRY_WAITING, TaskStatus.DEAD_LETTERED}),
+    TaskStatus.RETRY_WAITING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.DEAD_LETTERED}),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),
+    TaskStatus.DEAD_LETTERED: frozenset({TaskStatus.PENDING}),
 }
 
 
@@ -137,3 +138,39 @@ class Task(Base):
         self.next_retry_at = None
         self.retry_enqueued_at = None
         return completed_at
+
+    def mark_dead_lettered(
+        self,
+        error_message: str,
+        at: datetime | None = None,
+        started_at: datetime | None = None,
+    ) -> datetime:
+        """Move a retry-exhausted task into the dead-letter queue state.
+
+        The task record is preserved intact for inspection and manual recovery.
+        completed_at records when the task entered the DLQ.
+        """
+        completed_at = at or _utcnow()
+        self._transition_to(TaskStatus.DEAD_LETTERED)
+        self.started_at = self.started_at or started_at
+        self.completed_at = completed_at
+        self.error_message = error_message
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
+        return completed_at
+
+    def recover(self, at: datetime | None = None) -> datetime:
+        """Manually recover a dead-lettered task back to PENDING for re-execution.
+
+        Resets all runtime state so the task re-runs with a clean slate.
+        max_retries is preserved so the operator retains the original retry budget.
+        """
+        recovered_at = at or _utcnow()
+        self._transition_to(TaskStatus.PENDING)
+        self.retry_count = 0
+        self.started_at = None
+        self.completed_at = None
+        self.error_message = None
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
+        return recovered_at
