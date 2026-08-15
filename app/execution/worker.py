@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.orm import Session
 
+from app.execution.heartbeat import WorkerHeartbeat
 from app.execution.registry import ExecutionRegistry
 from app.models.task import Task
 from app.models.task_status import TaskStatus
@@ -25,26 +26,57 @@ class Worker:
         registry: ExecutionRegistry,
         session: Session,
         retry_base_delay_seconds: int = 1,
+        worker_id: str | None = None,
+        heartbeat_manager: WorkerHeartbeat | None = None,
+        heartbeat_ttl_seconds: int = 15,
+        heartbeat_interval_seconds: int = 5,
     ) -> None:
+        self.worker_id = worker_id or f"worker-{uuid4().hex}"
         self._queue = queue
         self._task_repository = task_repository
         self._registry = registry
         # The worker owns transaction boundaries for task execution state changes.
         self._session = session
         self._retry_base_delay_seconds = retry_base_delay_seconds
+        self._heartbeat_manager = heartbeat_manager
+        self._heartbeat_ttl_seconds = heartbeat_ttl_seconds
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._last_heartbeat_at: datetime | None = None
         self._running = False
+
+    def _send_heartbeat(self) -> None:
+        if self._heartbeat_manager is None:
+            return
+
+        now = datetime.now(timezone.utc)
+        if (
+            self._last_heartbeat_at is None
+            or (now - self._last_heartbeat_at).total_seconds() >= self._heartbeat_interval_seconds
+        ):
+            try:
+                self._heartbeat_manager.heartbeat(self.worker_id, ttl=self._heartbeat_ttl_seconds)
+                self._last_heartbeat_at = now
+            except Exception:
+                logger.exception("Failed to publish heartbeat for worker %s.", self.worker_id)
 
     def run(self) -> None:
         self._running = True
 
         while self._running:
+            self._send_heartbeat()
             self._schedule_due_retries()
             self.process_next_task()
 
     def stop(self) -> None:
         self._running = False
+        if self._heartbeat_manager is not None:
+            try:
+                self._heartbeat_manager.remove(self.worker_id)
+            except Exception:
+                logger.exception("Failed to remove heartbeat for worker %s on stop.", self.worker_id)
 
     def process_next_task(self) -> bool:
+        self._send_heartbeat()
         task_id = self._queue.dequeue()
 
         if task_id is None:
