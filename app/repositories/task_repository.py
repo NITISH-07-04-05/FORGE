@@ -36,6 +36,27 @@ class TaskRepository:
         statement = select(Task).order_by(Task.created_at.desc()).limit(limit)
         return list(self._session.scalars(statement))
 
+    def list_scheduled_due(
+        self,
+        at: datetime,
+        limit: int = 100,
+        for_update: bool = True,
+        skip_locked: bool = True,
+    ) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(
+                Task.status == TaskStatus.SCHEDULED,
+                Task.scheduled_at.is_not(None),
+                Task.scheduled_at <= at,
+            )
+            .order_by(Task.scheduled_at.asc(), Task.created_at.asc())
+            .limit(limit)
+        )
+        if for_update:
+            statement = statement.with_for_update(skip_locked=skip_locked)
+        return list(self._session.scalars(statement))
+
     def list_retry_waiting_due(self, at: datetime, limit: int = 100) -> list[Task]:
         statement = (
             select(Task)

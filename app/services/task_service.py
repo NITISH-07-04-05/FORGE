@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
@@ -36,14 +37,29 @@ class TaskService:
         payload: dict[str, Any],
         priority: TaskPriority = TaskPriority.NORMAL,
         max_retries: int = 0,
+        scheduled_at: datetime | None = None,
     ) -> Task:
+        now = datetime.now(timezone.utc)
+        target_scheduled_at: datetime | None = None
+        if scheduled_at is not None:
+            if scheduled_at.tzinfo is None:
+                target_scheduled_at = scheduled_at.replace(tzinfo=timezone.utc)
+            else:
+                target_scheduled_at = scheduled_at
+
+        if target_scheduled_at is not None and target_scheduled_at > now:
+            status = TaskStatus.SCHEDULED
+        else:
+            status = TaskStatus.PENDING
+
         # The service owns task initialization; the caller controls commit and enqueue ordering.
         task = Task(
             task_type=task_type,
-            status=TaskStatus.PENDING,
+            status=status,
             priority=priority,
             max_retries=max_retries,
             retry_count=0,
+            scheduled_at=target_scheduled_at,
             payload=dict(payload),
         )
         self._task_repository.create(task)

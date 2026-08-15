@@ -37,6 +37,7 @@ def _utcnow() -> datetime:
 
 
 ALLOWED_TASK_STATUS_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
+    TaskStatus.SCHEDULED: frozenset({TaskStatus.PENDING, TaskStatus.RUNNING, TaskStatus.FAILED}),
     TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
     TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RETRY_WAITING, TaskStatus.DEAD_LETTERED}),
     TaskStatus.RETRY_WAITING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED, TaskStatus.DEAD_LETTERED}),
@@ -78,6 +79,7 @@ class Task(Base):
     )
     next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # A JSON default keeps the task payload predictable even when callers omit it.
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSON,
@@ -101,6 +103,10 @@ class Task(Base):
             raise InvalidTaskStateTransition(self.status, target_status)
 
         self.status = target_status
+
+    def mark_pending(self) -> None:
+        """Move an eligible scheduled task into the ready PENDING state."""
+        self._transition_to(TaskStatus.PENDING)
 
     def mark_running(self, at: datetime | None = None) -> datetime:
         """Centralize running-state transitions so timestamps stay consistent."""

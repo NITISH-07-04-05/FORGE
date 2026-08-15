@@ -14,6 +14,7 @@ class TaskCreate(BaseModel):
     payload: dict[str, Any]
     priority: TaskPriority = TaskPriority.NORMAL
     max_retries: int = Field(default=0, ge=0)
+    scheduled_at: datetime | None = None
 
 
 class TaskResponse(BaseModel):
@@ -28,6 +29,7 @@ class TaskResponse(BaseModel):
     max_retries: int
     retry_count: int
     next_retry_at: datetime | None
+    scheduled_at: datetime | None = None
     created_at: datetime
     started_at: datetime | None
     completed_at: datetime | None

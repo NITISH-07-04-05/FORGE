@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
 from app.db.dependencies import get_db
+from app.models.task_status import TaskStatus
 from app.queue.redis_queue import RedisQueue
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate, TaskResponse
@@ -43,19 +44,23 @@ def create_task(
         payload=task_in.payload,
         priority=task_in.priority,
         max_retries=task_in.max_retries,
+        scheduled_at=task_in.scheduled_at,
     )
 
     # Commit first so the worker cannot race ahead of the visible task row.
     db.commit()
 
-    try:
-        task_service.enqueue_task(task.id, priority=task.priority)
-        return task
-    except TaskDispatchError as exc:
-        task_service.mark_dispatch_failed(task, str(exc))
-        db.commit()
-        db.refresh(task)
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    if task.status != TaskStatus.SCHEDULED:
+        try:
+            task_service.enqueue_task(task.id, priority=task.priority)
+            return task
+        except TaskDispatchError as exc:
+            task_service.mark_dispatch_failed(task, str(exc))
+            db.commit()
+            db.refresh(task)
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+
+    return task
 
 
 # IMPORTANT: this route must be declared before GET /{task_id} so FastAPI does
