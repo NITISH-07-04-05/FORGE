@@ -27,7 +27,7 @@ def _utcnow() -> datetime:
 
 
 ALLOWED_TASK_STATUS_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
-    TaskStatus.PENDING: frozenset({TaskStatus.RUNNING}),
+    TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
     TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED}),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),

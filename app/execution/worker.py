@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.execution.registry import ExecutionRegistry
 from app.models.task import Task
+from app.models.task_status import TaskStatus
 from app.queue.redis_queue import RedisQueue
 from app.repositories.task_repository import TaskRepository
+
+logger = logging.getLogger(__name__)
 
 
 class Worker:
@@ -32,20 +36,25 @@ class Worker:
         self._running = True
 
         while self._running:
-            task_id = self._queue.dequeue()
-
-            if task_id is None:
-                continue
-
-            self._process_task(task_id)
+            self.process_next_task()
 
     def stop(self) -> None:
         self._running = False
+
+    def process_next_task(self) -> bool:
+        task_id = self._queue.dequeue()
+
+        if task_id is None:
+            return False
+
+        self._process_task(task_id)
+        return True
 
     def _process_task(self, task_id: UUID) -> None:
         task = self._load_task(task_id)
 
         if task is None:
+            logger.warning("Skipping queued task %s because it no longer exists.", task_id)
             return
 
         started_at: datetime | None = None
@@ -58,6 +67,7 @@ class Worker:
             self._session.commit()
         except Exception as exc:
             self._session.rollback()
+            logger.exception("Task %s failed during execution.", task_id)
             self._mark_failed(task_id, str(exc), started_at=started_at)
 
     def _load_task(self, task_id: UUID) -> Task | None:
@@ -85,10 +95,15 @@ class Worker:
             return
 
         if started_at is None:
+            logger.error(
+                "Unable to record failure for task %s because RUNNING was never persisted.",
+                task_id,
+            )
             return
 
-        # Replaying RUNNING in-memory preserves the allowed lifecycle after a rollback.
-        task.mark_running(at=started_at)
+        # Real database rollbacks restore PENDING, but in-memory tests may still hold RUNNING.
+        if task.status == TaskStatus.PENDING:
+            task.mark_running(at=started_at)
         task.mark_failed(error_message)
 
         try:
@@ -96,3 +111,4 @@ class Worker:
             self._session.commit()
         except Exception:
             self._session.rollback()
+            logger.exception("Failed to persist FAILED state for task %s.", task_id)

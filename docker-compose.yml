@@ -2,25 +2,65 @@ services:
   postgres:
     image: postgres:17
     container_name: forge-postgres
-
     environment:
       POSTGRES_USER: forge
       POSTGRES_PASSWORD: password
       POSTGRES_DB: forge
-
     ports:
       - "5432:5432"
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U forge -d forge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
   redis:
     image: redis:8
     container_name: forge-redis
-
     ports:
       - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: forge-api
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://forge:password@postgres:5432/forge
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: forge:queue
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://forge:password@postgres:5432/forge
+      REDIS_URL: redis://redis:6379/0
+      QUEUE_NAME: forge:queue
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
 volumes:
   postgres_data:
-  
