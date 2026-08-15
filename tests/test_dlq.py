@@ -11,6 +11,7 @@ from app.execution.worker import Worker
 from app.execution.handlers import EchoTaskHandler
 from app.main import create_app
 from app.models.task import Task
+from app.models.task_priority import TaskPriority
 from app.models.task_status import TaskStatus
 from app.services.task_service import TaskNotRecoverableError
 
@@ -26,11 +27,11 @@ class DLQQueue:
         self.scheduled: dict[UUID, datetime] = {}
         self.enqueued: list[UUID] = []
 
-    def enqueue(self, task_id: UUID) -> None:
+    def enqueue(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.ready_task_ids.append(task_id)
         self.enqueued.append(task_id)
 
-    def enqueue_delayed(self, task_id: UUID, run_at: datetime) -> None:
+    def enqueue_delayed(self, task_id: UUID, run_at: datetime, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.scheduled[task_id] = run_at
 
     def dequeue(self) -> UUID | None:
@@ -92,6 +93,7 @@ def make_task(
     task_type: str,
     *,
     status: TaskStatus = TaskStatus.PENDING,
+    priority: TaskPriority = TaskPriority.NORMAL,
     max_retries: int = 0,
     retry_count: int = 0,
 ) -> Task:
@@ -99,6 +101,7 @@ def make_task(
         id=uuid4(),
         task_type=task_type,
         status=status,
+        priority=priority,
         max_retries=max_retries,
         retry_count=retry_count,
         payload={"x": 1},
@@ -266,7 +269,7 @@ class FakeQueue:
     def __init__(self) -> None:
         self.enqueued: list[UUID] = []
 
-    def enqueue(self, task_id: UUID) -> None:
+    def enqueue(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.enqueued.append(task_id)
 
 
@@ -276,6 +279,7 @@ class InMemoryRepo:
 
     def create(self, task: Task) -> Task:
         task.id = task.id or uuid4()
+        task.priority = task.priority or TaskPriority.NORMAL
         task.max_retries = task.max_retries or 0
         task.retry_count = task.retry_count or 0
         task.created_at = task.created_at or datetime.now(timezone.utc)
@@ -307,6 +311,7 @@ def _dead_lettered_task(repo: InMemoryRepo | None = None) -> Task:
         id=uuid4(),
         task_type="boom",
         status=TaskStatus.RUNNING,
+        priority=TaskPriority.NORMAL,
         max_retries=1,
         retry_count=1,
         payload={},
@@ -337,9 +342,9 @@ def build_client(
 
 def test_list_dead_lettered_returns_only_dead_lettered_tasks() -> None:
     """GET /tasks/dead-lettered filters to only DEAD_LETTERED tasks."""
-    dl = Task(id=uuid4(), task_type="boom", status=TaskStatus.DEAD_LETTERED, max_retries=1,
+    dl = Task(id=uuid4(), task_type="boom", status=TaskStatus.DEAD_LETTERED, priority=TaskPriority.NORMAL, max_retries=1,
               retry_count=1, payload={}, created_at=datetime.now(timezone.utc))
-    ok = Task(id=uuid4(), task_type="echo", status=TaskStatus.COMPLETED, max_retries=0,
+    ok = Task(id=uuid4(), task_type="echo", status=TaskStatus.COMPLETED, priority=TaskPriority.NORMAL, max_retries=0,
               retry_count=0, payload={}, created_at=datetime.now(timezone.utc))
 
     client, repo, _ = build_client([dl, ok])
@@ -354,7 +359,7 @@ def test_list_dead_lettered_returns_only_dead_lettered_tasks() -> None:
 
 def test_get_dead_lettered_task_by_id() -> None:
     """GET /tasks/{id} returns the full task record for a DEAD_LETTERED task."""
-    dl = Task(id=uuid4(), task_type="boom", status=TaskStatus.DEAD_LETTERED, max_retries=1,
+    dl = Task(id=uuid4(), task_type="boom", status=TaskStatus.DEAD_LETTERED, priority=TaskPriority.NORMAL, max_retries=1,
               retry_count=1, payload={}, created_at=datetime.now(timezone.utc))
 
     client, repo, _ = build_client([dl])
@@ -381,7 +386,7 @@ def test_recover_dead_lettered_task_re_enqueues() -> None:
 
 def test_recover_non_dead_lettered_task_returns_409() -> None:
     """POST /tasks/{id}/recover returns 409 when task is not DEAD_LETTERED."""
-    failed = Task(id=uuid4(), task_type="boom", status=TaskStatus.FAILED, max_retries=0,
+    failed = Task(id=uuid4(), task_type="boom", status=TaskStatus.FAILED, priority=TaskPriority.NORMAL, max_retries=0,
                   retry_count=0, payload={}, created_at=datetime.now(timezone.utc))
 
     client, _, _ = build_client([failed])

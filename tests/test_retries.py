@@ -7,6 +7,7 @@ from app.execution.registry import ExecutionRegistry, TaskHandler
 from app.execution.worker import Worker
 from app.execution.handlers import EchoTaskHandler
 from app.models.task import Task
+from app.models.task_priority import TaskPriority
 from app.models.task_status import TaskStatus
 
 
@@ -15,10 +16,10 @@ class RetryQueue:
         self.ready_task_ids = list(ready_task_ids or [])
         self.scheduled: dict[UUID, datetime] = {}
 
-    def enqueue(self, task_id: UUID) -> None:
+    def enqueue(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.ready_task_ids.append(task_id)
 
-    def enqueue_delayed(self, task_id: UUID, run_at: datetime) -> None:
+    def enqueue_delayed(self, task_id: UUID, run_at: datetime, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.scheduled[task_id] = run_at
 
     def dequeue(self) -> UUID | None:

@@ -41,6 +41,7 @@ def create_task(
     task = task_service.create_task(
         task_type=task_in.task_type,
         payload=task_in.payload,
+        priority=task_in.priority,
         max_retries=task_in.max_retries,
     )
 
@@ -48,7 +49,7 @@ def create_task(
     db.commit()
 
     try:
-        task_service.enqueue_task(task.id)
+        task_service.enqueue_task(task.id, priority=task.priority)
         return task
     except TaskDispatchError as exc:
         task_service.mark_dispatch_failed(task, str(exc))
@@ -107,7 +108,7 @@ def recover_dead_lettered_task(
     db.commit()
 
     try:
-        task_service.enqueue_task(task.id)
+        task_service.enqueue_task(task.id, priority=task.priority)
     except TaskDispatchError as exc:
         task_service.mark_dispatch_failed(task, str(exc))
         db.commit()

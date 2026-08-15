@@ -6,10 +6,13 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.task_priority import TaskPriority
+
 
 class TaskCreate(BaseModel):
     task_type: str
     payload: dict[str, Any]
+    priority: TaskPriority = TaskPriority.NORMAL
     max_retries: int = Field(default=0, ge=0)
 
 
@@ -20,6 +23,7 @@ class TaskResponse(BaseModel):
     id: UUID
     task_type: str
     status: str
+    priority: TaskPriority
     payload: dict[str, Any]
     max_retries: int
     retry_count: int

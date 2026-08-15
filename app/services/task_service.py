@@ -4,6 +4,7 @@ from typing import Any
 from uuid import UUID
 
 from app.models.task import Task
+from app.models.task_priority import TaskPriority
 from app.models.task_status import TaskStatus
 from app.queue.redis_queue import RedisQueue
 from app.repositories.task_repository import TaskRepository
@@ -33,12 +34,14 @@ class TaskService:
         self,
         task_type: str,
         payload: dict[str, Any],
+        priority: TaskPriority = TaskPriority.NORMAL,
         max_retries: int = 0,
     ) -> Task:
         # The service owns task initialization; the caller controls commit and enqueue ordering.
         task = Task(
             task_type=task_type,
             status=TaskStatus.PENDING,
+            priority=priority,
             max_retries=max_retries,
             retry_count=0,
             payload=dict(payload),
@@ -46,9 +49,9 @@ class TaskService:
         self._task_repository.create(task)
         return task
 
-    def enqueue_task(self, task_id: UUID) -> None:
+    def enqueue_task(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         try:
-            self._queue.enqueue(task_id)
+            self._queue.enqueue(task_id, priority=priority)
         except Exception as exc:
             raise TaskDispatchError("Task could not be enqueued after it was committed.") from exc
 

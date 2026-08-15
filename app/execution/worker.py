@@ -102,7 +102,7 @@ class Worker:
                 continue
 
             try:
-                self._queue.enqueue_delayed(task.id, task.next_retry_at)
+                self._queue.enqueue_delayed(task.id, task.next_retry_at, priority=task.priority)
                 task.retry_enqueued_at = task.next_retry_at
                 self._task_repository.update(task)
                 self._session.commit()
@@ -130,7 +130,7 @@ class Worker:
             return
 
         try:
-            self._queue.enqueue_delayed(task.id, next_retry_at)
+            self._queue.enqueue_delayed(task.id, next_retry_at, priority=task.priority)
         except Exception:
             logger.exception("Failed to enqueue delayed retry for task %s.", task.id)
 

@@ -9,12 +9,22 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.models.task_exceptions import InvalidTaskStateTransition
+from app.models.task_priority import TaskPriority
 from app.models.task_status import TaskStatus
 
 
 task_status_type = SqlEnum(
     TaskStatus,
     name="task_status",
+    native_enum=False,
+    create_constraint=False,
+    validate_strings=True,
+    length=50,
+)
+
+task_priority_type = SqlEnum(
+    TaskPriority,
+    name="task_priority",
     native_enum=False,
     create_constraint=False,
     validate_strings=True,
@@ -47,6 +57,12 @@ class Task(Base):
         nullable=False,
         default=TaskStatus.PENDING,
         server_default=text(f"'{TaskStatus.PENDING.value}'"),
+    )
+    priority: Mapped[TaskPriority] = mapped_column(
+        task_priority_type,
+        nullable=False,
+        default=TaskPriority.NORMAL,
+        server_default=text(f"'{TaskPriority.NORMAL.value}'"),
     )
     max_retries: Mapped[int] = mapped_column(
         Integer,

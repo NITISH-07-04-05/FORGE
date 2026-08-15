@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from app.api.routers.tasks import get_db, get_redis_queue, get_task_repository
 from app.main import create_app
 from app.models.task import Task
+from app.models.task_priority import TaskPriority
 from app.models.task_status import TaskStatus
 
 
@@ -30,7 +31,7 @@ class FakeQueue:
     def __init__(self) -> None:
         self.enqueued: list[UUID] = []
 
-    def enqueue(self, task_id: UUID) -> None:
+    def enqueue(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         self.enqueued.append(task_id)
 
 
@@ -41,6 +42,7 @@ class InMemoryTaskRepository:
     def create(self, task: Task) -> Task:
         task.id = task.id or uuid4()
         task.status = task.status or TaskStatus.PENDING
+        task.priority = task.priority or TaskPriority.NORMAL
         task.max_retries = task.max_retries or 0
         task.retry_count = task.retry_count or 0
         task.next_retry_at = task.next_retry_at if task.next_retry_at is not None else None
