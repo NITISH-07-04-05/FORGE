@@ -25,11 +25,18 @@ class TaskService:
         self._task_repository = task_repository
         self._queue = queue
 
-    def create_task(self, task_type: str, payload: dict[str, Any]) -> Task:
+    def create_task(
+        self,
+        task_type: str,
+        payload: dict[str, Any],
+        max_retries: int = 0,
+    ) -> Task:
         # The service owns task initialization; the caller controls commit and enqueue ordering.
         task = Task(
             task_type=task_type,
             status=TaskStatus.PENDING,
+            max_retries=max_retries,
+            retry_count=0,
             payload=dict(payload),
         )
         self._task_repository.create(task)

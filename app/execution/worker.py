@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 from uuid import UUID
 
@@ -24,18 +24,21 @@ class Worker:
         task_repository: TaskRepository,
         registry: ExecutionRegistry,
         session: Session,
+        retry_base_delay_seconds: int = 1,
     ) -> None:
         self._queue = queue
         self._task_repository = task_repository
         self._registry = registry
         # The worker owns transaction boundaries for task execution state changes.
         self._session = session
+        self._retry_base_delay_seconds = retry_base_delay_seconds
         self._running = False
 
     def run(self) -> None:
         self._running = True
 
         while self._running:
+            self._schedule_due_retries()
             self.process_next_task()
 
     def stop(self) -> None:
@@ -68,7 +71,15 @@ class Worker:
         except Exception as exc:
             self._session.rollback()
             logger.exception("Task %s failed during execution.", task_id)
-            self._mark_failed(task_id, str(exc), started_at=started_at)
+            task = self._load_task(task_id)
+
+            if task is None:
+                return
+
+            if task.retry_count < task.max_retries:
+                self._handle_retryable_failure(task, str(exc), started_at=started_at)
+            else:
+                self._handle_terminal_failure(task, str(exc), started_at=started_at)
 
     def _load_task(self, task_id: UUID) -> Task | None:
         return self._task_repository.get(task_id)
@@ -82,33 +93,56 @@ class Worker:
         task.mark_completed()
         self._task_repository.update(task)
 
-    def _mark_failed(
-        self,
-        task_id: UUID,
-        error_message: str,
-        started_at: datetime | None,
-    ) -> None:
-        # Failure is recorded in a fresh transaction after rollback so the worker keeps moving.
-        task = self._load_task(task_id)
+    def _schedule_due_retries(self) -> None:
+        now = datetime.now(timezone.utc)
+        due_tasks = self._task_repository.list_retry_waiting_due(at=now)
 
-        if task is None:
-            return
+        for task in due_tasks:
+            if task.next_retry_at is None:
+                continue
 
-        if started_at is None:
-            logger.error(
-                "Unable to record failure for task %s because RUNNING was never persisted.",
-                task_id,
-            )
-            return
+            try:
+                self._queue.enqueue_delayed(task.id, task.next_retry_at)
+                task.retry_enqueued_at = task.next_retry_at
+                self._task_repository.update(task)
+                self._session.commit()
+            except Exception:
+                self._session.rollback()
+                logger.exception("Failed to schedule retry for task %s.", task.id)
 
-        # Real database rollbacks restore PENDING, but in-memory tests may still hold RUNNING.
+    def _retry_delay_for(self, retry_count: int) -> datetime:
+        delay_seconds = self._retry_base_delay_seconds * (2 ** max(0, retry_count - 1))
+        return datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
+
+    def _handle_retryable_failure(self, task: Task, error_message: str, started_at: datetime | None) -> None:
         if task.status == TaskStatus.PENDING:
             task.mark_running(at=started_at)
-        task.mark_failed(error_message)
+
+        next_retry_at = self._retry_delay_for(task.retry_count + 1)
+        task.mark_retry_waiting(error_message=error_message, next_retry_at=next_retry_at)
 
         try:
             self._task_repository.update(task)
             self._session.commit()
         except Exception:
             self._session.rollback()
-            logger.exception("Failed to persist FAILED state for task %s.", task_id)
+            logger.exception("Failed to persist RETRY_WAITING state for task %s.", task.id)
+            return
+
+        try:
+            self._queue.enqueue_delayed(task.id, next_retry_at)
+        except Exception:
+            logger.exception("Failed to enqueue delayed retry for task %s.", task.id)
+
+    def _handle_terminal_failure(self, task: Task, error_message: str, started_at: datetime | None) -> None:
+        if task.status == TaskStatus.RUNNING:
+            task.mark_failed(error_message)
+        else:
+            task.mark_failed(error_message, started_at=started_at)
+
+        try:
+            self._task_repository.update(task)
+            self._session.commit()
+        except Exception:
+            self._session.rollback()
+            logger.exception("Failed to persist FAILED state for task %s.", task.id)

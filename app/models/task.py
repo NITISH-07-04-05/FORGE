@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import JSON, DateTime, Enum as SqlEnum, String, Text, Uuid, func, text
+from sqlalchemy import JSON, DateTime, Enum as SqlEnum, Integer, String, Text, Uuid, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -28,7 +28,8 @@ def _utcnow() -> datetime:
 
 ALLOWED_TASK_STATUS_TRANSITIONS: dict[TaskStatus, frozenset[TaskStatus]] = {
     TaskStatus.PENDING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
-    TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED}),
+    TaskStatus.RUNNING: frozenset({TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.RETRY_WAITING}),
+    TaskStatus.RETRY_WAITING: frozenset({TaskStatus.RUNNING, TaskStatus.FAILED}),
     TaskStatus.COMPLETED: frozenset(),
     TaskStatus.FAILED: frozenset(),
 }
@@ -46,6 +47,20 @@ class Task(Base):
         default=TaskStatus.PENDING,
         server_default=text(f"'{TaskStatus.PENDING.value}'"),
     )
+    max_retries: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    retry_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_enqueued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     # A JSON default keeps the task payload predictable even when callers omit it.
     payload: Mapped[dict[str, Any]] = mapped_column(
         JSON,
@@ -77,6 +92,8 @@ class Task(Base):
         self.started_at = self.started_at or started_at
         self.completed_at = None
         self.error_message = None
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
         return self.started_at
 
     def mark_completed(self, at: datetime | None = None) -> datetime:
@@ -85,6 +102,24 @@ class Task(Base):
         self._transition_to(TaskStatus.COMPLETED)
         self.completed_at = completed_at
         self.error_message = None
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
+        return completed_at
+
+    def mark_retry_waiting(
+        self,
+        error_message: str,
+        next_retry_at: datetime,
+        at: datetime | None = None,
+    ) -> datetime:
+        """Move a failed execution into the delayed retry state."""
+        completed_at = at or _utcnow()
+        self._transition_to(TaskStatus.RETRY_WAITING)
+        self.retry_count += 1
+        self.completed_at = completed_at
+        self.error_message = error_message
+        self.next_retry_at = next_retry_at
+        self.retry_enqueued_at = None
         return completed_at
 
     def mark_failed(
@@ -99,4 +134,6 @@ class Task(Base):
         self.started_at = self.started_at or started_at
         self.completed_at = completed_at
         self.error_message = error_message
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
         return completed_at

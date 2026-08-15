@@ -41,6 +41,10 @@ class InMemoryTaskRepository:
     def create(self, task: Task) -> Task:
         task.id = task.id or uuid4()
         task.status = task.status or TaskStatus.PENDING
+        task.max_retries = task.max_retries or 0
+        task.retry_count = task.retry_count or 0
+        task.next_retry_at = task.next_retry_at if task.next_retry_at is not None else None
+        task.retry_enqueued_at = task.retry_enqueued_at if task.retry_enqueued_at is not None else None
         task.created_at = task.created_at or datetime.now(timezone.utc)
         self.tasks[task.id] = task
         return task

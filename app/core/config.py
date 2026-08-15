@@ -13,6 +13,7 @@ class Settings(BaseSettings):
 
     redis_url: str
     queue_name: str
+    retry_base_delay_seconds: int = 1
 
     model_config = SettingsConfigDict(
         env_file=".env",

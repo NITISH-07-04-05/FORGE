@@ -41,6 +41,7 @@ def create_task(
     task = task_service.create_task(
         task_type=task_in.task_type,
         payload=task_in.payload,
+        max_retries=task_in.max_retries,
     )
 
     # Commit first so the worker cannot race ahead of the visible task row.

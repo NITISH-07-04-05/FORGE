@@ -57,6 +57,10 @@ def make_task(task_type: str, payload: dict[str, object]) -> Task:
         id=uuid4(),
         task_type=task_type,
         status=TaskStatus.PENDING,
+        max_retries=0,
+        retry_count=0,
+        next_retry_at=None,
+        retry_enqueued_at=None,
         payload=payload,
         created_at=datetime.now(timezone.utc),
     )

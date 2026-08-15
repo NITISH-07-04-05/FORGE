@@ -2,10 +2,13 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from datetime import datetime
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.task import Task
+from app.models.task_status import TaskStatus
 
 
 class TaskRepository:
@@ -27,6 +30,20 @@ class TaskRepository:
 
     def list(self, limit: int = 100) -> list[Task]:
         statement = select(Task).order_by(Task.created_at.desc()).limit(limit)
+        return list(self._session.scalars(statement))
+
+    def list_retry_waiting_due(self, at: datetime, limit: int = 100) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(
+                Task.status == TaskStatus.RETRY_WAITING,
+                Task.next_retry_at.is_not(None),
+                Task.retry_enqueued_at.is_(None),
+                Task.next_retry_at <= at,
+            )
+            .order_by(Task.next_retry_at.asc(), Task.created_at.asc())
+            .limit(limit)
+        )
         return list(self._session.scalars(statement))
 
     def update(self, task: Task) -> Task:
