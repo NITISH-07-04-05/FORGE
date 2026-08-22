@@ -7,6 +7,7 @@ from uuid import UUID
 from app.execution.lease import TaskLeaseManager
 from app.models.task import Task
 from app.models.task_status import TaskStatus
+from app.metrics.registry import ForgeMetrics
 from app.queue.redis_queue import RedisQueue
 from app.repositories.task_repository import TaskRepository
 
@@ -50,11 +51,13 @@ class StaleTaskRecoverer:
         lease_manager: TaskLeaseManager,
         queue: RedisQueue,
         claim_ttl_seconds: int = 30,
+        metrics: ForgeMetrics | None = None,
     ) -> None:
         self._task_repository = task_repository
         self._lease_manager = lease_manager
         self._queue = queue
         self._claim_ttl_seconds = claim_ttl_seconds
+        self._metrics = metrics or ForgeMetrics()
 
     def _claim_key(self, task_id: UUID) -> str:
         return f"forge:recovery:claim:{task_id}"
@@ -94,10 +97,18 @@ class StaleTaskRecoverer:
                 task.mark_failed(f"Dispatch failed during stale recovery: {exc}")
                 self._task_repository.update(task)
                 self._task_repository.session.commit()
+                try:
+                    self._metrics.record_task_failed()
+                except Exception:
+                    pass
                 raise StaleTaskRecoveryError(
                     f"Task {task.id} could not be re-enqueued after stale recovery."
                 ) from exc
 
+            try:
+                self._metrics.record_stale_task_recovered()
+            except Exception:
+                pass
             return True
         finally:
             self._release_claim(task_id)

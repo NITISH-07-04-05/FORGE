@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.execution.heartbeat import WorkerHeartbeat
 from app.execution.lease import TaskLeaseManager
 from app.execution.registry import ExecutionRegistry
+from app.metrics.registry import ForgeMetrics
 from app.models.task import Task
 from app.models.task_status import TaskStatus
 from app.queue.redis_queue import RedisQueue
@@ -33,6 +34,7 @@ class Worker:
         heartbeat_manager: WorkerHeartbeat | None = None,
         heartbeat_ttl_seconds: int = 15,
         heartbeat_interval_seconds: int = 5,
+        metrics: ForgeMetrics | None = None,
     ) -> None:
         self.worker_id = worker_id or f"worker-{uuid4().hex}"
         self._queue = queue
@@ -46,6 +48,7 @@ class Worker:
         self._heartbeat_manager = heartbeat_manager
         self._heartbeat_ttl_seconds = heartbeat_ttl_seconds
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._metrics = metrics or ForgeMetrics()
         self._last_heartbeat_at: datetime | None = None
         self._running = False
 
@@ -109,6 +112,7 @@ class Worker:
             handler.execute(task.payload)
             self._mark_completed(task)
             self._session.commit()
+            self._record_completion_metrics(started_at)
         except Exception as exc:
             self._session.rollback()
             logger.exception("Task %s failed during execution.", task_id)
@@ -162,6 +166,17 @@ class Worker:
         task.mark_completed()
         self._task_repository.update(task)
 
+    def _record_completion_metrics(self, started_at: datetime | None) -> None:
+        if started_at is None:
+            return
+
+        try:
+            duration = (datetime.now(timezone.utc) - started_at).total_seconds()
+            self._metrics.record_execution_duration(duration)
+            self._metrics.record_task_completed()
+        except Exception:
+            logger.exception("Failed to record completion metrics for worker %s.", self.worker_id)
+
     def _schedule_due_retries(self) -> None:
         now = datetime.now(timezone.utc)
         due_tasks = self._task_repository.list_retry_waiting_due(at=now)
@@ -197,6 +212,7 @@ class Worker:
         try:
             self._task_repository.update(task)
             self._session.commit()
+            self._record_retry_metrics(started_at)
         except Exception:
             self._session.rollback()
             logger.exception("Failed to persist RETRY_WAITING state for task %s.", task.id)
@@ -225,6 +241,7 @@ class Worker:
             try:
                 self._task_repository.update(task)
                 self._session.commit()
+                self._record_failure_metrics(started_at)
             except Exception:
                 self._session.rollback()
                 logger.exception("Failed to persist FAILED state for task %s.", task.id)
@@ -242,6 +259,31 @@ class Worker:
         try:
             self._task_repository.update(task)
             self._session.commit()
+            self._record_dead_letter_metrics(started_at)
         except Exception:
             self._session.rollback()
             logger.exception("Failed to persist DEAD_LETTERED state for task %s.", task.id)
+
+    def _record_retry_metrics(self, started_at: datetime | None) -> None:
+        try:
+            if started_at is not None:
+                self._metrics.record_execution_duration((datetime.now(timezone.utc) - started_at).total_seconds())
+            self._metrics.record_task_retried()
+        except Exception:
+            logger.exception("Failed to record retry metrics for worker %s.", self.worker_id)
+
+    def _record_failure_metrics(self, started_at: datetime | None) -> None:
+        try:
+            if started_at is not None:
+                self._metrics.record_execution_duration((datetime.now(timezone.utc) - started_at).total_seconds())
+            self._metrics.record_task_failed()
+        except Exception:
+            logger.exception("Failed to record failure metrics for worker %s.", self.worker_id)
+
+    def _record_dead_letter_metrics(self, started_at: datetime | None) -> None:
+        try:
+            if started_at is not None:
+                self._metrics.record_execution_duration((datetime.now(timezone.utc) - started_at).total_seconds())
+            self._metrics.record_task_dead_lettered()
+        except Exception:
+            logger.exception("Failed to record dead-letter metrics for worker %s.", self.worker_id)
