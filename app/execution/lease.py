@@ -93,6 +93,14 @@ class TaskLeaseManager:
         key = self._key_for(task_id)
         return int(self._redis.ttl(key))
 
+    def acquire_claim(self, claim_key: str, ttl: int) -> bool:
+        """Acquire a short-lived Redis claim for recovery coordination."""
+        return bool(self._redis.set(claim_key, "claimed", ex=int(ttl), nx=True))
+
+    def release_claim(self, claim_key: str) -> bool:
+        """Release a short-lived Redis claim if still present."""
+        return bool(self._redis.delete(claim_key))
+
     def close(self) -> None:
         self._redis.close()
 

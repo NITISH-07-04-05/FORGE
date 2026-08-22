@@ -19,6 +19,10 @@ class TaskRepository:
         # The service layer owns the session lifecycle and transaction boundary.
         self._session = session
 
+    @property
+    def session(self) -> Session:
+        return self._session
+
     def create(self, task: Task) -> Task:
         # Flush so database-generated values are available without committing.
         self._session.add(task)
@@ -53,6 +57,15 @@ class TaskRepository:
 
     def list(self, limit: int = 100) -> list[Task]:
         statement = select(Task).order_by(Task.created_at.desc()).limit(limit)
+        return list(self._session.scalars(statement))
+
+    def list_running(self, limit: int = 100) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(Task.status == TaskStatus.RUNNING)
+            .order_by(Task.started_at.asc().nullslast(), Task.created_at.asc())
+            .limit(limit)
+        )
         return list(self._session.scalars(statement))
 
     def list_scheduled_due(

@@ -198,3 +198,14 @@ class Task(Base):
         self.next_retry_at = None
         self.retry_enqueued_at = None
         return recovered_at
+
+    def recover_stale(self, at: datetime | None = None) -> datetime:
+        """Recover a stale RUNNING task back to PENDING without resetting retry history."""
+        recovered_at = at or _utcnow()
+        self.status = TaskStatus.PENDING
+        self.started_at = None
+        self.completed_at = None
+        self.error_message = None
+        self.next_retry_at = None
+        self.retry_enqueued_at = None
+        return recovered_at
