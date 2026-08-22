@@ -7,6 +7,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.orm import Session
 
 from app.execution.heartbeat import WorkerHeartbeat
+from app.execution.lease import TaskLeaseManager
 from app.execution.registry import ExecutionRegistry
 from app.models.task import Task
 from app.models.task_status import TaskStatus
@@ -27,6 +28,8 @@ class Worker:
         session: Session,
         retry_base_delay_seconds: int = 1,
         worker_id: str | None = None,
+        lease_manager: TaskLeaseManager | None = None,
+        lease_ttl_seconds: int = 30,
         heartbeat_manager: WorkerHeartbeat | None = None,
         heartbeat_ttl_seconds: int = 15,
         heartbeat_interval_seconds: int = 5,
@@ -38,6 +41,8 @@ class Worker:
         # The worker owns transaction boundaries for task execution state changes.
         self._session = session
         self._retry_base_delay_seconds = retry_base_delay_seconds
+        self._lease_manager = lease_manager
+        self._lease_ttl_seconds = lease_ttl_seconds
         self._heartbeat_manager = heartbeat_manager
         self._heartbeat_ttl_seconds = heartbeat_ttl_seconds
         self._heartbeat_interval_seconds = heartbeat_interval_seconds
@@ -92,6 +97,10 @@ class Worker:
             logger.warning("Skipping queued task %s because it no longer exists.", task_id)
             return
 
+        if not self._acquire_lease(task_id):
+            logger.info("Skipping task %s because worker %s could not acquire lease.", task_id, self.worker_id)
+            return
+
         started_at: datetime | None = None
 
         try:
@@ -108,20 +117,48 @@ class Worker:
             if task is None:
                 return
 
+            if not self._owns_lease(task.id):
+                logger.warning("Skipping finalization for task %s because worker %s lost the lease.", task.id, self.worker_id)
+                return
+
             if task.retry_count < task.max_retries:
                 self._handle_retryable_failure(task, str(exc), started_at=started_at)
             else:
                 self._handle_terminal_failure(task, str(exc), started_at=started_at)
+        finally:
+            self._release_lease(task_id)
 
     def _load_task(self, task_id: UUID) -> Task | None:
         return self._task_repository.get(task_id)
 
+    def _acquire_lease(self, task_id: UUID) -> bool:
+        if self._lease_manager is None:
+            return True
+        return self._lease_manager.acquire(task_id, self.worker_id, ttl=self._lease_ttl_seconds)
+
+    def _owns_lease(self, task_id: UUID) -> bool:
+        if self._lease_manager is None:
+            return True
+        return self._lease_manager.is_owner(task_id, self.worker_id)
+
+    def _release_lease(self, task_id: UUID) -> None:
+        if self._lease_manager is None:
+            return
+        try:
+            self._lease_manager.release(task_id, self.worker_id)
+        except Exception:
+            logger.exception("Failed to release lease for task %s.", task_id)
+
     def _mark_running(self, task: Task) -> datetime:
+        if not self._owns_lease(task.id):
+            raise RuntimeError(f"Lease lost before task {task.id} could be marked RUNNING.")
         started_at = task.mark_running()
         self._task_repository.update(task)
         return started_at
 
     def _mark_completed(self, task: Task) -> None:
+        if not self._owns_lease(task.id):
+            raise RuntimeError(f"Lease lost before task {task.id} could be marked COMPLETED.")
         task.mark_completed()
         self._task_repository.update(task)
 
@@ -147,6 +184,10 @@ class Worker:
         return datetime.now(timezone.utc) + timedelta(seconds=delay_seconds)
 
     def _handle_retryable_failure(self, task: Task, error_message: str, started_at: datetime | None) -> None:
+        if not self._owns_lease(task.id):
+            self._session.rollback()
+            logger.warning("Skipping RETRY_WAITING update for task %s because lease was lost.", task.id)
+            return
         if task.status == TaskStatus.PENDING:
             task.mark_running(at=started_at)
 
@@ -167,6 +208,10 @@ class Worker:
             logger.exception("Failed to enqueue delayed retry for task %s.", task.id)
 
     def _handle_terminal_failure(self, task: Task, error_message: str, started_at: datetime | None) -> None:
+        if not self._owns_lease(task.id):
+            self._session.rollback()
+            logger.warning("Skipping terminal failure update for task %s because lease was lost.", task.id)
+            return
         # Tasks with retries configured that exhaust their budget enter the DLQ.
         # Zero-retry failures (max_retries=0) remain ordinary FAILED — V1 behavior preserved.
         if task.max_retries > 0 and task.retry_count >= task.max_retries:
@@ -185,6 +230,10 @@ class Worker:
                 logger.exception("Failed to persist FAILED state for task %s.", task.id)
 
     def _handle_dead_letter(self, task: Task, error_message: str, started_at: datetime | None) -> None:
+        if not self._owns_lease(task.id):
+            self._session.rollback()
+            logger.warning("Skipping DEAD_LETTERED update for task %s because lease was lost.", task.id)
+            return
         if task.status == TaskStatus.RUNNING:
             task.mark_dead_lettered(error_message)
         else:
