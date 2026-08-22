@@ -4,6 +4,7 @@ from uuid import UUID
 
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,12 +25,30 @@ class TaskRepository:
         self._session.flush()
         return task
 
+    def create_or_get_by_idempotency_key(self, task: Task) -> tuple[Task, bool]:
+        self._session.add(task)
+        try:
+            self._session.flush()
+        except IntegrityError:
+            self._session.rollback()
+            existing = self.get_by_idempotency_key(task.idempotency_key)
+            if existing is None:
+                raise
+            return existing, False
+        return task, True
+
     def get(self, task_id: UUID) -> Task | None:
         statement = select(Task).where(Task.id == task_id)
         return self._session.scalar(statement)
 
     def get_for_update(self, task_id: UUID) -> Task | None:
         statement = select(Task).where(Task.id == task_id).with_for_update()
+        return self._session.scalar(statement)
+
+    def get_by_idempotency_key(self, idempotency_key: str | None) -> Task | None:
+        if idempotency_key is None:
+            return None
+        statement = select(Task).where(Task.idempotency_key == idempotency_key)
         return self._session.scalar(statement)
 
     def list(self, limit: int = 100) -> list[Task]:

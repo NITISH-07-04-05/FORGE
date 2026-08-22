@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
@@ -17,6 +18,16 @@ class TaskDispatchError(RuntimeError):
 
 class TaskNotRecoverableError(RuntimeError):
     """Raised when a recovery is attempted on a task that is not DEAD_LETTERED."""
+
+
+class TaskIdempotencyConflictError(RuntimeError):
+    """Raised when an idempotency key is reused for a different logical request."""
+
+
+@dataclass(slots=True)
+class TaskSubmissionResult:
+    task: Task
+    created: bool
 
 
 class TaskService:
@@ -39,7 +50,9 @@ class TaskService:
         max_retries: int = 0,
         scheduled_at: datetime | None = None,
         delay_seconds: int | None = None,
-    ) -> Task:
+        idempotency_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> TaskSubmissionResult:
         now = datetime.now(timezone.utc)
         target_scheduled_at: datetime | None = None
 
@@ -62,6 +75,8 @@ class TaskService:
         # The service owns task initialization; the caller controls commit and enqueue ordering.
         task = Task(
             task_type=task_type,
+            idempotency_key=idempotency_key,
+            request_fingerprint=request_fingerprint,
             status=status,
             priority=priority,
             max_retries=max_retries,
@@ -69,8 +84,24 @@ class TaskService:
             scheduled_at=target_scheduled_at,
             payload=dict(payload),
         )
-        self._task_repository.create(task)
-        return task
+        if idempotency_key is None:
+            self._task_repository.create(task)
+            return TaskSubmissionResult(task=task, created=True)
+
+        existing = self._task_repository.get_by_idempotency_key(idempotency_key)
+        if existing is not None:
+            if existing.request_fingerprint != request_fingerprint:
+                raise TaskIdempotencyConflictError(
+                    "Idempotency key was already used for a different task request."
+                )
+            return TaskSubmissionResult(task=existing, created=False)
+
+        created_task, created = self._task_repository.create_or_get_by_idempotency_key(task)
+        if not created and created_task.request_fingerprint != request_fingerprint:
+            raise TaskIdempotencyConflictError(
+                "Idempotency key was already used for a different task request."
+            )
+        return TaskSubmissionResult(task=created_task, created=created)
 
     def enqueue_task(self, task_id: UUID, priority: TaskPriority = TaskPriority.NORMAL) -> None:
         try:

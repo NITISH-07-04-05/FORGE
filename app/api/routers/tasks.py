@@ -11,7 +11,12 @@ from app.models.task_status import TaskStatus
 from app.queue.redis_queue import RedisQueue
 from app.repositories.task_repository import TaskRepository
 from app.schemas.task import TaskCreate, TaskResponse
-from app.services.task_service import TaskDispatchError, TaskNotRecoverableError, TaskService
+from app.services.task_service import (
+    TaskDispatchError,
+    TaskIdempotencyConflictError,
+    TaskNotRecoverableError,
+    TaskService,
+)
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 
@@ -39,19 +44,26 @@ def create_task(
     db: Annotated[Session, Depends(get_db)],
     task_service: Annotated[TaskService, Depends(get_task_service)],
 ) -> TaskResponse:
-    task = task_service.create_task(
-        task_type=task_in.task_type,
-        payload=task_in.payload,
-        priority=task_in.priority,
-        max_retries=task_in.max_retries,
-        scheduled_at=task_in.scheduled_at,
-        delay_seconds=task_in.delay_seconds,
-    )
+    try:
+        submission = task_service.create_task(
+            task_type=task_in.task_type,
+            payload=task_in.payload,
+            priority=task_in.priority,
+            max_retries=task_in.max_retries,
+            scheduled_at=task_in.scheduled_at,
+            delay_seconds=task_in.delay_seconds,
+            idempotency_key=task_in.idempotency_key,
+            request_fingerprint=task_in.fingerprint(),
+        )
+    except TaskIdempotencyConflictError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+    task = submission.task
 
     # Commit first so the worker cannot race ahead of the visible task row.
     db.commit()
 
-    if task.status != TaskStatus.SCHEDULED:
+    if submission.created and task.status != TaskStatus.SCHEDULED:
         try:
             task_service.enqueue_task(task.id, priority=task.priority)
             return task

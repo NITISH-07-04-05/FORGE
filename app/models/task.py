@@ -53,6 +53,8 @@ class Task(Base):
     # UUID keys are generated in application code so tasks can be referenced before commit.
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
     task_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True, unique=True)
+    request_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[TaskStatus] = mapped_column(
         task_status_type,
         nullable=False,
