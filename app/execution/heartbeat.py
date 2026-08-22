@@ -4,6 +4,7 @@ from typing import Union
 from uuid import UUID
 
 from redis import Redis
+from redis.exceptions import RedisError
 
 from app.core.config import settings
 
@@ -44,6 +45,17 @@ class WorkerHeartbeat:
         """Return remaining TTL in seconds (-2 if expired/nonexistent, -1 if no TTL)."""
         key = self._key_for(worker_id)
         return int(self._redis.ttl(key))
+
+    def list_worker_ids(self) -> list[str]:
+        """Return all worker IDs whose heartbeat key currently exists."""
+        pattern = f"{self._prefix}:*"
+        worker_ids: list[str] = []
+
+        for key in self._redis.scan_iter(match=pattern):
+            worker_ids.append(str(key).removeprefix(f"{self._prefix}:"))
+
+        worker_ids.sort()
+        return worker_ids
 
     def remove(self, worker_id: WorkerIdType) -> bool:
         """Explicitly remove a worker's heartbeat (e.g. on clean worker shutdown)."""
